@@ -1,0 +1,25 @@
+# See docs at: https://mystmd.org/guide/frontmatter
+version: 1
+project:
+  title: ASF Cookbook Template
+  github: https://github.com/ASFOpenSARlab/ASF_Cookbook_Template
+  authors:
+    - name: ASF
+  copyright: '2026'
+  toc:
+    - file: README.md
+    - title: Preamble
+      children:
+        - file: notebooks/how-to-cite.md
+    - title: Cookbook Set Up
+      children:
+        - file: notebooks/software_environment.ipynb
+        - file: notebooks/set_up_Earthdata_Login.md
+    - title: Introduction
+      children:
+        - file: CONTRIBUTING.md
+        - file: notebooks/notebook-template.ipynb
+
+site:
+  template: book-theme
+

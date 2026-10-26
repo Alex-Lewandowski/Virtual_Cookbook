@@ -1,0 +1,11 @@
+# The ASF_Cookbook_Template is set up to use Pixi by default,
+# but the build actions also support conda environments.
+# To switch to conda, update this yml and set all `environment_manager`  
+# variables to "conda" in the repo's GitHub workflows
+name: cookbook-dev
+channels:
+  - conda-forge
+dependencies:
+  - jupyterlab
+  - mystmd
+  - jupyterlab-myst

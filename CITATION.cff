@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this cookbook, please cite it as below."
+authors:
+  # Update entries for each author in your Cookbook-- see https://github.com/citation-file-format/citation-file-format/blob/main/schema-guide.md
+  - family-names: Lewandowski
+    given-names: Alex F.
+    orcid: https://orcid.org/0009-0006-9584-0687
+    affiliation: Alaska Satellite Facility
+  - name: "Cookbook Template contributors" # use the 'name' field to acknowledge organizations
+    website: "https://github.com/ASFOpenSARlab/ASF_Cookbook_Template/graphs/contributors"
+  - name: Alaska Satellite Facility
+    affiliation: University of Alaska Fairbanks
+    website: https://asf.alaska.edu
+title: "Cookbook Template"
+abstract: "A sample cookbook description."
