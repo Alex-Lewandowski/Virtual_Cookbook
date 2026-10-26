@@ -330,13 +330,27 @@ def attribution_cell(nb, src, upstream, commit, date):
 def insert_attribution(nb, cell):
     cells = nb.setdefault('cells', [])
     cells[:] = [c for c in cells if ATTRIBUTION_KEY not in c.get('metadata', {})]
-    # Keep a leading title cell (or frontmatter) first so MyST still uses it as the page title.
-    index = 0
-    if cells and cells[0].get('cell_type') == 'markdown':
-        first = cell_text(cells[0]).lstrip()
-        if first.startswith('# ') or first.startswith('---'):
-            index = 1
-    cells.insert(index, cell)
+    if not cells or cells[0].get('cell_type') != 'markdown':
+        cells.insert(0, cell)
+        return
+
+    # Put the note directly under the notebook's title. The title stays first so
+    # MyST still uses it as the page title; if the first cell continues past the
+    # title, it is split so the note isn't pushed below the whole introduction.
+    first = cells[0]
+    m = re.match(r'(\s*(?:---\n.*?\n---[ \t]*\n)?\s*(?:#[ \t]+[^\n]*(?:\n|$))?)(.*)', cell_text(first), re.S)
+    head, rest = m.group(1), m.group(2).lstrip('\n')
+    if not head.strip():
+        cells.insert(0, cell)  # no title or frontmatter to keep above the note
+        return
+    cells.insert(1, cell)
+    if rest.strip():
+        set_cell_text(first, head.rstrip('\n'))
+        body = json.loads(json.dumps(first))
+        set_cell_text(body, rest)
+        if 'id' in body:
+            body['id'] = (body['id'][:58] + '-intro')
+        cells.insert(2, body)
 
 
 def dump_notebook(nb):
