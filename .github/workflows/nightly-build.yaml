@@ -2,8 +2,13 @@ name: nightly-build
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 0 * * *" # Daily “At 00:00”
+  # Runs nightly, right after sync-external-notebooks has pulled in upstream
+  # changes (that workflow holds the 00:00 UTC schedule).
+  workflow_run:
+    workflows:
+      - sync-external-notebooks
+    types:
+      - completed
 
 jobs:
   build:

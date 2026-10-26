@@ -5,6 +5,10 @@ on:
   push:
     branches:
       - main
+    # A change to just the notebook list is built by nightly-build instead,
+    # after sync-external-notebooks has pulled the notebooks in.
+    paths-ignore:
+      - cookbook_sources.yml
   workflow_dispatch:
 
 jobs:
