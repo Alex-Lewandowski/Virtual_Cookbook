@@ -1,3 +1,7 @@
+# external/ holds copies of upstream notebooks that are overwritten on every sync,
+# so reformatting them here would only be undone.
+exclude: ^external/
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

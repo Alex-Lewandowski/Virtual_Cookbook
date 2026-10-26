@@ -1,0 +1,62 @@
+name: sync-external-notebooks
+
+# Pulls the notebooks listed in cookbook_sources.yml from their upstream
+# repositories, with their images and an attribution cell, and updates myst.yml.
+# Changes are committed straight to main. The nightly-build workflow runs after
+# this one finishes, so every nightly build uses the freshly synced notebooks.
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # Daily at 00:00 UTC; nightly-build follows when this finishes
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - cookbook_sources.yml
+      - .github/scripts/sync_external_notebooks.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-external-notebooks
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Pull notebooks from upstream
+        id: sync
+        # If one source fails, still commit the others; the last step reports the failure.
+        continue-on-error: true
+        run: python .github/scripts/sync_external_notebooks.py
+
+      - name: Commit changes
+        run: |
+          git add -A external myst.yml
+          if git diff --cached --quiet; then
+            echo "Notebooks are already up to date."
+            exit 0
+          fi
+          changed=$(git diff --cached --name-only -- 'external/*.ipynb' | sed 's/^/- /')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Sync external notebooks from upstream" -m "${changed:-Images or table of contents only.}"
+          git push
+
+      - name: Report sources that failed to sync
+        if: steps.sync.outcome == 'failure'
+        run: |
+          echo "::error::Some notebooks could not be synced. Their last good copies were kept; see the 'Pull notebooks from upstream' step for details."
+          exit 1

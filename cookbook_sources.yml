@@ -1,0 +1,26 @@
+# Notebooks pulled into this Cookbook from other GitHub repositories.
+#
+# The "sync-external-notebooks" GitHub Action reads this file every night (and
+# whenever it changes on main), then for each notebook below it:
+#   - copies the latest version into external/<owner>/<repo>/<original path>,
+#   - copies any images the notebook uses, keeping their relative paths,
+#   - adds a Markdown cell crediting and linking to the original notebook,
+#   - lists the notebook in myst.yml under the section named in `toc_section`.
+#
+# To add a notebook, paste its GitHub URL as a new `- url:` entry.
+# To remove one, delete its entry; its copy and images are removed on the next sync.
+# Files under external/ are overwritten on every sync, so edit notebooks upstream.
+#
+# Optional keys for each entry:
+#   title:   page title in the table of contents (defaults to the notebook's own title)
+#   group:   sub-heading to list the notebook under, inside `toc_section`
+#   ref:     branch, tag or commit to follow (defaults to the one in the URL)
+#   include: extra files or folders from the same repo to copy alongside the
+#            notebook, e.g. a helper package it imports: [util]
+
+toc_section: Community Notebooks
+
+sources:
+  - url: https://github.com/ASFOpenSARlab/NISAR_Cookbook/blob/main/notebooks/search_stream_NISAR_asf_search.ipynb
+
+  - url: https://github.com/ASFOpenSARlab/opensarlab_MintPy_Recipe_Book/blob/main/4_Access_NISAR_Data.ipynb
