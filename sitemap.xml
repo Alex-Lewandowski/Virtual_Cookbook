@@ -19,4 +19,10 @@
   <url>
     <loc>http://localhost:3000/notebook-template</loc>
   </url>
+  <url>
+    <loc>http://localhost:3000/search-stream-nisar-asf-search</loc>
+  </url>
+  <url>
+    <loc>http://localhost:3000/access-nisar-data</loc>
+  </url>
 </urlset>
