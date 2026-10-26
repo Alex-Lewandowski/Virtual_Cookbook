@@ -1,0 +1,1 @@
+import{a}from"/Virtual_Cookbook/build/_shared/chunk-CD6QVE2Y.js";import"/Virtual_Cookbook/build/_shared/chunk-X4DW3KA4.js";import"/Virtual_Cookbook/build/_shared/chunk-RAQ24GF6.js";export default a();
