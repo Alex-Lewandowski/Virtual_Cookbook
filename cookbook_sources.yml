@@ -4,11 +4,13 @@
 # whenever it changes on main), then for each notebook below it:
 #   - copies the latest version into external/<owner>/<repo>/<original path>,
 #   - copies any images the notebook uses, keeping their relative paths,
+#   - copies any local Python modules the notebook imports or %runs (and the
+#     modules those import), keeping their relative paths so the imports work,
 #   - adds a Markdown cell crediting and linking to the original notebook,
 #   - lists the notebook in myst.yml under the section named in `toc_section`.
 #
 # To add a notebook, paste its GitHub URL as a new `- url:` entry.
-# To remove one, delete its entry; its copy and images are removed on the next sync.
+# To remove one, delete its entry; its copy, images and modules are removed on the next sync.
 # To place a notebook elsewhere in the table of contents, move its `- file:` line
 # in myst.yml outside the "external notebooks" marker comments; the sync then
 # leaves it where you put it. If you later remove its entry here, delete that line
@@ -20,7 +22,8 @@
 #   group:   sub-heading to list the notebook under, inside `toc_section`
 #   ref:     branch, tag or commit to follow (defaults to the one in the URL)
 #   include: extra files or folders from the same repo to copy alongside the
-#            notebook, e.g. a helper package it imports: [util]
+#            notebook, for anything the sync can't detect, such as data files
+#            a notebook or helper module reads: [data/sample.csv]
 
 toc_section: Community Notebooks
 

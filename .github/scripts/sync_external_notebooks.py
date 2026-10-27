@@ -7,6 +7,8 @@ Reads cookbook_sources.yml at the repository root and, for every listed notebook
   mirroring the upstream layout so relative paths inside the notebook keep working;
 * copies the images the notebook's Markdown cells reference (Markdown images, HTML
   <img> tags and MyST {figure}/{image} directives), creating folders as needed;
+* copies the local Python modules the notebook imports (or %runs), and the modules
+  those import in turn, at the same relative paths so the imports keep working;
 * rewrites links to other upstream files that were not copied so they point at
   GitHub instead of breaking;
 * inserts a Markdown cell that credits the original notebook, its repository,
@@ -20,6 +22,7 @@ Usage: python .github/scripts/sync_external_notebooks.py
 Requires git and PyYAML.
 """
 
+import ast
 import json
 import os
 import posixpath
@@ -175,6 +178,17 @@ class Upstream:
         out = self.git('ls-tree', '-r', '--name-only', self.head, '--', path)
         return [p for p in out.splitlines() if p]
 
+    def tree(self):
+        """Every file path in the repository, and every folder (cached)."""
+        if not hasattr(self, '_tree'):
+            files = set(self.files_under('.'))
+            dirs = {''}
+            for f in files:
+                parts = f.split('/')[:-1]
+                dirs.update('/'.join(parts[: i + 1]) for i in range(len(parts)))
+            self._tree = files, dirs
+        return self._tree
+
     def last_change(self, path):
         sha, date = self.git('log', '-1', '--format=%H %cs', self.head, '--', path).split()
         return sha, date
@@ -256,6 +270,149 @@ def find_images(nb, nb_path):
                     else:
                         found.add((target, resolved))
     return found
+
+
+RUN_MAGIC = re.compile(r'^\s*%run\s+(?:-\S+\s+)*["\']?([^\s"\']+\.py)\b', re.M)
+PYTHON_CELL_MAGICS = {'time', 'timeit', 'capture', 'prun', 'debug'}
+
+
+def python_source(code):
+    """Turn notebook cell code into parseable Python by blanking IPython syntax."""
+    lines = code.splitlines()
+    if lines and lines[0].lstrip().startswith('%%'):
+        magic = lines[0].lstrip()[2:].split()[0] if lines[0].strip() != '%%' else ''
+        if magic not in PYTHON_CELL_MAGICS:
+            return ''  # %%bash, %%writefile, ... are not Python
+        lines = lines[1:]
+    out = []
+    for line in lines:
+        stripped = line.lstrip()
+        indent = line[: len(line) - len(stripped)]
+        # Shell escapes, line magics, help (`x?`) and `x = !cmd` become no-ops.
+        if (
+            stripped.startswith(('!', '%', '?'))
+            or re.match(r'^[\w.,\s]+=\s*[!%]', stripped)
+            or (stripped.endswith('?') and not stripped.startswith('#'))
+        ):
+            out.append(f'{indent}pass')
+        else:
+            out.append(line)
+    return '\n'.join(out)
+
+
+def imports_in(code):
+    """Yield (level, module, names) for each import statement in Python code."""
+    flags = ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+
+    def parse(text):
+        try:
+            return [compile(text, '<cell>', 'exec', flags=flags, dont_inherit=True)]
+        except (SyntaxError, ValueError):
+            return []
+
+    trees = parse(code)
+    if not trees:
+        # Fall back to parsing line by line so one odd line doesn't hide the cell's imports.
+        trees = [t for line in code.splitlines() for t in parse(line.strip())]
+    for node in (n for tree in trees for n in ast.walk(tree)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield 0, alias.name, []
+        elif isinstance(node, ast.ImportFrom):
+            yield node.level, node.module or '', [a.name for a in node.names if a.name != '*']
+
+
+def ancestors(folder):
+    """The folder itself, then each parent up to the repository root ('')."""
+    out = [folder]
+    while folder:
+        folder = posixpath.dirname(folder)
+        out.append(folder)
+    return out
+
+
+def module_files(dotted, base, files, dirs):
+    """Files that importing `dotted` from folder `base` loads, or None if it isn't there."""
+    parts = [p for p in dotted.split('.') if p]
+    if not parts:
+        return None
+    found, path = [], base
+    for i, part in enumerate(parts):
+        path = posixpath.join(path, part)
+        if path + '.py' in files:
+            return found + [path + '.py'] if i == len(parts) - 1 else None
+        if path not in dirs:
+            return None
+        init = posixpath.join(path, '__init__.py')
+        if init in files:
+            found.append(init)
+        elif not any(f.startswith(path + '/') and f.endswith('.py') for f in files):
+            return None  # a plain folder, e.g. data/, not a package
+    return found
+
+
+def find_local_code(nb, nb_path, upstream):
+    """Python files in the notebook's repository that the notebook imports or %runs.
+
+    Modules are looked up the way they'd be found when the notebook runs from its
+    own folder, including the common `sys.path.insert(0, parent)` pattern: the
+    notebook's folder first, then each parent up to the repository root. Imports
+    inside the copied files are followed too, so helpers of helpers come along.
+    """
+    files, dirs = upstream.tree()
+    nb_bases = ancestors(posixpath.dirname(nb_path))
+    found, queue = set(), []
+
+    def add(paths):
+        for p in paths:
+            if p not in found:
+                found.add(p)
+                if p.endswith('.py'):
+                    queue.append(p)
+
+    def resolve_imports(code, package_dir, bases):
+        for level, module, names in imports_in(code):
+            if level:
+                if package_dir is None:
+                    continue  # relative import in a notebook: not resolvable
+                base = package_dir
+                for _ in range(level - 1):
+                    base = posixpath.dirname(base)
+                candidates = [base]
+            else:
+                candidates = bases
+            for base in candidates:
+                hit = module_files(module, base, files, dirs) if module else []
+                if hit is None:
+                    continue
+                add(hit)
+                # `from pkg import mod` loads pkg/mod.py when mod is a submodule.
+                for name in names:
+                    sub = f'{module}.{name}' if module else name
+                    extra = module_files(sub, base, files, dirs)
+                    if extra:
+                        add(extra)
+                break  # Python stops at the first folder that has the module
+
+    for cell in nb.get('cells', []):
+        if cell.get('cell_type') != 'code':
+            continue
+        code = cell_text(cell)
+        for target in RUN_MAGIC.findall(code):
+            resolved = resolve(nb_path, target)
+            if resolved in files:
+                add([resolved])
+        resolve_imports(python_source(code), None, nb_bases)
+
+    while queue:
+        path = queue.pop()
+        file_dir = posixpath.dirname(path)
+        code = upstream.read(path).decode('utf-8', 'replace')
+        # A helper's own folder is searched first, so `import sibling` in a script works.
+        bases = [file_dir] + [b for b in nb_bases if b != file_dir]
+        resolve_imports(code, file_dir, bases)
+
+    return sorted(found)
 
 
 def rewrite_links(nb, src, upstream, copied):
@@ -488,6 +645,10 @@ def sync_source(src, upstream, written):
             continue
         write_file(src.dest_for(resolved), upstream.read(resolved), written)
         files.add(resolved)
+
+    for path in find_local_code(nb, src.path, upstream):
+        write_file(src.dest_for(path), upstream.read(path), written)
+        files.add(path)
 
     rewrite_links(nb, src, upstream, files | {src.path})
     insert_attribution(nb, attribution_cell(nb, src, upstream, commit, date))
