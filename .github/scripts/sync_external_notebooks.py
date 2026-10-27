@@ -394,12 +394,34 @@ def toc_block(section, entries, indent):
     return lines
 
 
+TOC_FILE = re.compile(r'^\s*(?:-\s+)?file:\s*["\']?([^"\'#\s]+)')
+
+
 def update_myst(section, entries):
+    """Rebuild the managed TOC block; return external files listed elsewhere that no longer exist.
+
+    Notebooks you've placed yourself elsewhere in myst.yml (outside the marker
+    comments) stay where you put them and are left out of the managed block.
+    """
     lines = MYST.read_text().splitlines()
     begin = next((i for i, l in enumerate(lines) if l.strip() == TOC_BEGIN), None)
     end = next((i for i, l in enumerate(lines) if l.strip() == TOC_END), None)
 
-    if begin is not None and end is not None and begin < end:
+    has_block = begin is not None and end is not None and begin < end
+    placed = {
+        m.group(1)
+        for i, l in enumerate(lines)
+        if not (has_block and begin <= i <= end)
+        and (m := TOC_FILE.match(l))
+        and m.group(1).startswith(DEST_DIR + '/')
+    }
+    synced = {file for _, _, file in entries}
+    for file in sorted(placed & synced):
+        log(f'  {file} is placed elsewhere in myst.yml; leaving it there')
+    entries = [e for e in entries if e[2] not in placed]
+    stale = sorted(f for f in placed - synced if not (ROOT / f).exists())
+
+    if has_block:
         indent = len(lines[begin]) - len(lines[begin].lstrip())
         lines[begin : end + 1] = toc_block(section, entries, indent)
     else:
@@ -425,6 +447,7 @@ def update_myst(section, entries):
     text = '\n'.join(lines) + '\n'
     yaml.safe_load(text)  # fail loudly rather than write a broken myst.yml
     MYST.write_text(text)
+    return stale
 
 
 # --------------------------------------------------------------------------- #
@@ -517,13 +540,18 @@ def main():
         for src in sources
         if src.dest in new
     ]
-    update_myst(section, entries)
+    stale = update_myst(section, entries)
+    for file in stale:
+        error(
+            f'myst.yml lists {file}, but that notebook is no longer synced. '
+            'Remove it from myst.yml, or add its source back to cookbook_sources.yml.'
+        )
 
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     LOCK.write_text(json.dumps({'notebooks': new}, indent=2, sort_keys=True) + '\n')
 
     log(f'Synced {len(sources) - len(failures)} of {len(sources)} notebooks.')
-    if failures:
+    if failures or stale:
         sys.exit(1)
 
 
