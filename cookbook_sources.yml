@@ -9,6 +9,10 @@
 #
 # To add a notebook, paste its GitHub URL as a new `- url:` entry.
 # To remove one, delete its entry; its copy and images are removed on the next sync.
+# To place a notebook elsewhere in the table of contents, move its `- file:` line
+# in myst.yml outside the "external notebooks" marker comments; the sync then
+# leaves it where you put it. If you later remove its entry here, delete that line
+# from myst.yml too (the sync fails with a reminder until you do).
 # Files under external/ are overwritten on every sync, so edit notebooks upstream.
 #
 # Optional keys for each entry:
