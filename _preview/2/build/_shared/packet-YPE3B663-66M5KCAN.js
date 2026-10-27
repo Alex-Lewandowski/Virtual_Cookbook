@@ -1,1 +1,0 @@
-import{a as e,b as r}from"/Virtual_Cookbook/_preview/2/build/_shared/chunk-IMEQYZY3.js";import"/Virtual_Cookbook/_preview/2/build/_shared/chunk-GEZIJWLJ.js";import"/Virtual_Cookbook/_preview/2/build/_shared/chunk-RAQ24GF6.js";export{e as PacketModule,r as createPacketServices};
