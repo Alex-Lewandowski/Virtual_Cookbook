@@ -6,11 +6,14 @@
 #   - copies any images the notebook uses, keeping their relative paths,
 #   - copies any local Python modules the notebook imports or %runs (and the
 #     modules those import), keeping their relative paths so the imports work,
+#   - copies files from the notebook's repo that its code names by a literal path,
+#     e.g. pd.read_csv("data/sample.csv"), up to 10 MB each,
+#   - copies anything listed under `include:` and skips anything under `exclude:`,
 #   - adds a Markdown cell crediting and linking to the original notebook,
 #   - lists the notebook in myst.yml under the section named in `toc_section`.
 #
 # To add a notebook, paste its GitHub URL as a new `- url:` entry.
-# To remove one, delete its entry; its copy, images and modules are removed on the next sync.
+# To remove one, delete its entry; its copy and everything copied with it are removed on the next sync.
 # To place a notebook elsewhere in the table of contents, move its `- file:` line
 # in myst.yml outside the "external notebooks" marker comments; the sync then
 # leaves it where you put it. If you later remove its entry here, delete that line
@@ -21,9 +24,34 @@
 #   title:   page title in the table of contents (defaults to the notebook's own title)
 #   group:   sub-heading to list the notebook under, inside `toc_section`
 #   ref:     branch, tag or commit to follow (defaults to the one in the URL)
-#   include: extra files or folders from the same repo to copy alongside the
-#            notebook, for anything the sync can't detect, such as data files
-#            a notebook or helper module reads: [data/sample.csv]
+#   include: extra files to copy, for anything the sync can't detect (paths built
+#            at run time, files over 10 MB, files from elsewhere). Each item is one of:
+#              - data/sample.csv              a file or folder in the notebook's repo,
+#                                             relative to the repo root
+#              - url: https://github.com/<owner>/<repo>/blob/<branch>/<path>
+#                                             a file (or /tree/ folder) in any GitHub repo
+#              - url: https://example.org/data.csv
+#                                             any web address, downloaded on every sync
+#            Add `to: <path>` to choose where an item goes, relative to the notebook's
+#            repo root. Without it, repo files keep their path and web downloads go
+#            next to the notebook. Included files are copied whatever their size (up
+#            to GitHub's 100 MB limit) and even if they match `exclude:`.
+#   exclude: files the sync would otherwise copy automatically (images, modules or
+#            data files) that you don't want. Paths relative to the notebook's repo
+#            root; a folder excludes everything in it, and * wildcards work:
+#            [data/large_stack.h5, util/plotting.py, assets/*.gif]
+#            Excluded images are shown from GitHub instead, so the page still renders.
+#
+# Example entry using every option:
+#   - url: https://github.com/<owner>/<repo>/blob/main/notebooks/example.ipynb
+#     title: An example notebook
+#     group: Examples
+#     include:
+#       - data/aoi/
+#       - url: https://github.com/<other-owner>/<other-repo>/blob/main/lookup.csv
+#         to: data/lookup.csv
+#     exclude:
+#       - assets/animation.gif
 
 toc_section: Community Notebooks
 
