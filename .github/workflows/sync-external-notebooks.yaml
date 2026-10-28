@@ -15,6 +15,7 @@ on:
     paths:
       - cookbook_sources.yml
       - .github/scripts/sync_external_notebooks.py
+      - .github/scripts/notebook_sync/**
 
 permissions:
   contents: write
