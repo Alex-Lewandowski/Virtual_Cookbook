@@ -1,0 +1,37 @@
+name: test-notebook-sync
+
+# Runs the notebook sync's tests whenever its code changes, so a broken change
+# is caught on the pull request instead of in the nightly sync. The tests use
+# stand-in repositories and need no network access.
+
+on:
+  pull_request:
+    paths:
+      - .github/scripts/**
+      - .github/workflows/test-notebook-sync.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - .github/scripts/**
+      - .github/workflows/test-notebook-sync.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyyaml pytest
+
+      - name: Run tests
+        run: python -m pytest -v .github/scripts/tests
