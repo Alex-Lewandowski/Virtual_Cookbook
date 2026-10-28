@@ -9,6 +9,10 @@ Reads cookbook_sources.yml at the repository root and, for every listed notebook
   <img> tags and MyST {figure}/{image} directives), creating folders as needed;
 * copies the local Python modules the notebook imports (or %runs), and the modules
   those import in turn, at the same relative paths so the imports keep working;
+* copies files in the notebook's repository that its code (or those modules) names
+  by a literal path, such as "data/aoi.geojson", up to 10 MB each;
+* copies anything listed under the notebook's `include:` key: paths in its own
+  repository, files or folders from other GitHub repositories, or any URL;
 * rewrites links to other upstream files that were not copied so they point at
   GitHub instead of breaking;
 * inserts a Markdown cell that credits the original notebook, its repository,
@@ -23,6 +27,7 @@ Requires git and PyYAML.
 """
 
 import ast
+import fnmatch
 import json
 import os
 import posixpath
@@ -30,9 +35,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlparse
 
 import yaml
 
@@ -50,6 +56,14 @@ DEFAULT_SECTION = 'Community Notebooks'
 GITHUB_URL = re.compile(
     r'^https?://github\.com/([^/]+)/([^/]+)/(?:blob|tree|raw)/([^/]+)/(.+)$'
 )
+RAW_GITHUB_URL = re.compile(r'^https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$')
+LFS_POINTER = b'version https://git-lfs.github.com/spec/v1'
+
+# Files a notebook's code mentions are copied automatically only up to this size;
+# list bigger ones under `include:` if you really want them in this repository.
+AUTO_MAX_BYTES = 10 * 1024 * 1024
+# GitHub refuses pushes containing files over 100 MB.
+MAX_BYTES = 100 * 1024 * 1024
 
 # References to files inside Markdown cells.
 MD_IMAGE = re.compile(r'!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*"|\s+\'[^\']*\')?\s*\)')
@@ -78,6 +92,54 @@ def error(msg):
 
 
 @dataclass
+class Extra:
+    """An `include:` entry: a path in the notebook's repo, or a URL, plus where it goes."""
+
+    path: str = None  # file or folder in the notebook's own repository
+    url: str = None  # GitHub file/folder URL in any repository, or any http(s) URL
+    to: str = None  # destination, relative to the notebook's repository copy
+
+    @property
+    def github(self):
+        """(owner, repo, ref, path) for a GitHub URL, else None."""
+        if not self.url:
+            return None
+        url = self.url.split('#')[0].split('?')[0]
+        m = GITHUB_URL.match(url) or RAW_GITHUB_URL.match(url)
+        if not m:
+            return None
+        owner, repo, ref, path = m.groups()
+        return owner, repo.removesuffix('.git'), ref, unquote(path).strip('/')
+
+
+def safe_relpath(value, what):
+    path = posixpath.normpath(str(value).strip().strip('/'))
+    if not value or str(value).startswith('/') or path == '.' or path.startswith('..'):
+        raise ValueError(f'{what} must be a relative path inside the repository: {value!r}')
+    return path
+
+
+def parse_include(item):
+    if isinstance(item, str):
+        if re.match(r'^https?://', item):
+            return Extra(url=item)
+        return Extra(path=safe_relpath(item, 'include path'))
+    if isinstance(item, dict) and (item.get('url') or item.get('path')):
+        unknown = set(item) - {'url', 'path', 'to'}
+        if unknown:
+            raise ValueError(f'unknown key(s) in include entry: {sorted(unknown)}')
+        if item.get('url') and item.get('path'):
+            raise ValueError('an include entry takes either url or path, not both')
+        to = safe_relpath(item['to'], 'include "to"') if item.get('to') else None
+        if item.get('path'):
+            return Extra(path=safe_relpath(item['path'], 'include path'), to=to)
+        if not re.match(r'^https?://', str(item['url'])):
+            raise ValueError(f'include url must start with http:// or https://: {item["url"]}')
+        return Extra(url=str(item['url']), to=to)
+    raise ValueError(f'include entries must be a path, a URL, or a mapping with url/path and to: {item!r}')
+
+
+@dataclass
 class Source:
     owner: str
     repo: str
@@ -86,6 +148,15 @@ class Source:
     title: str = None
     group: str = None
     include: list = field(default_factory=list)
+    exclude: list = field(default_factory=list)
+
+    def excluded(self, path):
+        """True if a path in the notebook's repository matches an `exclude:` pattern."""
+        for pattern in self.exclude:
+            folder = pattern.rstrip('/')
+            if fnmatch.fnmatchcase(path, pattern) or path == folder or path.startswith(folder + '/'):
+                return True
+        return False
 
     @property
     def slug(self):
@@ -130,7 +201,8 @@ def load_manifest():
                 path=unquote(path).strip('/'),
                 title=entry.get('title'),
                 group=entry.get('group'),
-                include=[str(p).strip('/') for p in entry.get('include') or []],
+                include=[parse_include(item) for item in entry.get('include') or []],
+                exclude=[safe_relpath(p, 'exclude pattern') for p in entry.get('exclude') or []],
             )
         except (KeyError, ValueError) as exc:
             raise SystemExit(f'cookbook_sources.yml entry {i} is invalid: {exc}')
@@ -153,6 +225,7 @@ class Upstream:
     def __init__(self, owner, repo, ref, workdir):
         self.dir = Path(workdir) / f'{owner}__{repo}__{re.sub(r"[^A-Za-z0-9._-]", "_", ref)}'
         self.dir.mkdir(parents=True)
+        self.slug = f'{owner}/{repo}'
         self.git('init', '-q')
         self.git('remote', 'add', 'origin', f'https://github.com/{owner}/{repo}.git')
         self.git('fetch', '-q', '--filter=blob:none', '--no-tags', 'origin', ref)
@@ -300,8 +373,8 @@ def python_source(code):
     return '\n'.join(out)
 
 
-def imports_in(code):
-    """Yield (level, module, names) for each import statement in Python code."""
+def parse_python(code):
+    """Parse Python code into AST nodes, falling back to line by line on a syntax error."""
     flags = ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
 
     def parse(text):
@@ -312,9 +385,14 @@ def imports_in(code):
 
     trees = parse(code)
     if not trees:
-        # Fall back to parsing line by line so one odd line doesn't hide the cell's imports.
+        # One odd line shouldn't hide everything else in the cell.
         trees = [t for line in code.splitlines() for t in parse(line.strip())]
-    for node in (n for tree in trees for n in ast.walk(tree)):
+    return [n for tree in trees for n in ast.walk(tree)]
+
+
+def imports_in(code):
+    """Yield (level, module, names) for each import statement in Python code."""
+    for node in parse_python(code):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield 0, alias.name, []
@@ -351,13 +429,14 @@ def module_files(dotted, base, files, dirs):
     return found
 
 
-def find_local_code(nb, nb_path, upstream):
+def find_local_code(nb, nb_path, upstream, skip=lambda path: False):
     """Python files in the notebook's repository that the notebook imports or %runs.
 
     Modules are looked up the way they'd be found when the notebook runs from its
     own folder, including the common `sys.path.insert(0, parent)` pattern: the
     notebook's folder first, then each parent up to the repository root. Imports
     inside the copied files are followed too, so helpers of helpers come along.
+    Files for which `skip(path)` is true are left out, along with their imports.
     """
     files, dirs = upstream.tree()
     nb_bases = ancestors(posixpath.dirname(nb_path))
@@ -365,7 +444,7 @@ def find_local_code(nb, nb_path, upstream):
 
     def add(paths):
         for p in paths:
-            if p not in found:
+            if p not in found and not skip(p):
                 found.add(p)
                 if p.endswith('.py'):
                     queue.append(p)
@@ -413,6 +492,74 @@ def find_local_code(nb, nb_path, upstream):
         resolve_imports(code, file_dir, bases)
 
     return sorted(found)
+
+
+def path_strings(code):
+    """String literals in Python code that could be relative file paths."""
+    for node in parse_python(code):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            value = node.value.strip()
+            if (
+                value
+                and len(value) < 300
+                and '\n' not in value
+                and ('.' in value or '/' in value)
+                and is_local(value)
+                and not re.search(r'[*?{}\[\]<>|]', value)  # globs, templates, regexes
+            ):
+                yield value
+
+
+def find_data_files(nb, nb_path, code_files, upstream):
+    """Files in the notebook's repository that its code refers to by a literal path.
+
+    Looks at the string literals in the notebook's code cells and in the local
+    modules copied with it. A string counts only if it names an existing file:
+    relative to the notebook's folder (where it runs) or one of its parents, or,
+    inside a module, relative to that module's folder (the `Path(__file__).parent
+    / "x.csv"` pattern). Folders, notebooks and Git LFS files are left out.
+    """
+    files, _ = upstream.tree()
+    nb_bases = ancestors(posixpath.dirname(nb_path))
+    sources = [(python_source(cell_text(c)), nb_bases) for c in nb.get('cells', []) if c.get('cell_type') == 'code']
+    for path in code_files:
+        if path.endswith('.py'):
+            here = posixpath.dirname(path)
+            code = upstream.read(path).decode('utf-8', 'replace')
+            sources.append((code, [here] + [b for b in nb_bases if b != here]))
+
+    found = set()
+    for code, bases in sources:
+        for value in path_strings(code):
+            for base in bases:
+                resolved = posixpath.normpath(posixpath.join(base, value))
+                if resolved in files and not resolved.endswith('.ipynb'):
+                    found.add(resolved)
+                    break
+    return sorted(found)
+
+
+def point_images_at(nb, urls):
+    """Replace image references (target -> URL) in Markdown cells."""
+    if not urls:
+        return
+
+    def sub(m):
+        target = m.group(1)
+        if target not in urls:
+            return m.group(0)
+        whole, start = m.group(0), m.start(0)
+        return whole[: m.start(1) - start] + urls[target] + whole[m.end(1) - start :]
+
+    for cell in nb.get('cells', []):
+        if cell.get('cell_type') != 'markdown':
+            continue
+        text = cell_text(cell)
+        new = text
+        for pattern in (MD_IMAGE, HTML_SRC, MYST_IMAGE):
+            new = pattern.sub(sub, new)
+        if new != text:
+            set_cell_text(cell, new)
 
 
 def rewrite_links(nb, src, upstream, copied):
@@ -624,31 +771,105 @@ def write_file(rel, data, written):
     log(f'  updated {rel}')
 
 
-def sync_source(src, upstream, written):
+def download(url):
+    req = urllib.request.Request(url, headers={'User-Agent': 'cookbook-notebook-sync'})
+    with urllib.request.urlopen(req, timeout=120) as res:
+        data = res.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        raise RuntimeError(f'{url} is over 100 MB, which GitHub does not accept')
+    return data
+
+
+def read_blob(upstream, path):
+    """A file's content, following Git LFS pointers to the real file."""
+    data = upstream.read(path)
+    if data.startswith(LFS_POINTER):
+        data = download(
+            f'https://media.githubusercontent.com/media/{upstream.slug}/{upstream.head}/{quote(path)}'
+        )
+    if len(data) > MAX_BYTES:
+        raise RuntimeError(f'{upstream.slug}/{path} is over 100 MB, which GitHub does not accept')
+    return data
+
+
+def copy_from_repo(upstream, path, to, copy, where):
+    """Copy a file or folder from a repository; `to` renames or relocates it."""
+    kind = upstream.kind(path)
+    if kind is None:
+        warn(f'{where}: not found in {upstream.slug}: {path}')
+        return
+    for f in [path] if kind == 'blob' else upstream.files_under(path):
+        if to is None:
+            dest = f
+        elif kind == 'blob':
+            dest = to
+        else:
+            dest = posixpath.join(to, posixpath.relpath(f, path))
+        copy(dest, read_blob(upstream, f))
+
+
+def sync_source(src, upstream, written, get_upstream):
     if upstream.kind(src.path) != 'blob':
         raise RuntimeError(f'{src.path} not found in {src.slug}@{src.ref}')
     commit, date = upstream.last_change(src.path)
     nb = json.loads(upstream.read(src.path))
+    where = f'{src.slug}/{src.path}'
 
+    # Paths of everything copied, relative to this notebook's repository copy.
     files = set()
+
+    def copy(dest, data):
+        write_file(src.dest_for(dest), data, written)
+        files.add(dest)
+
+    # 1. Files listed under `include:` in cookbook_sources.yml, copied whatever their size.
     for inc in src.include:
-        kind = upstream.kind(inc)
-        if kind is None:
-            warn(f'{src.slug}: include path not found: {inc}')
-        for path in [inc] if kind == 'blob' else upstream.files_under(inc) if kind else []:
-            write_file(src.dest_for(path), upstream.read(path), written)
-            files.add(path)
+        if inc.path:
+            copy_from_repo(upstream, inc.path, inc.to, copy, where)
+        elif inc.github:
+            owner, repo, ref, path = inc.github
+            other = upstream if (owner, repo, ref) == (src.owner, src.repo, src.ref) else get_upstream(owner, repo, ref)
+            copy_from_repo(other, path, inc.to, copy, where)
+        else:
+            name = posixpath.basename(unquote(urlparse(inc.url).path)) or 'download'
+            copy(inc.to or posixpath.join(posixpath.dirname(src.path), name), download(inc.url))
 
+    # Steps 2-4 find files automatically; `exclude:` patterns override them,
+    # but anything listed under `include:` (already copied above) is kept.
+
+    # 2. Images used in Markdown cells. Excluded ones are shown from GitHub instead.
+    remote_images = {}
     for target, resolved in sorted(find_images(nb, src.path)):
-        if upstream.kind(resolved) != 'blob':
-            warn(f'{src.slug}/{src.path}: image not found upstream: {target}')
+        if resolved in files:
             continue
-        write_file(src.dest_for(resolved), upstream.read(resolved), written)
-        files.add(resolved)
+        if upstream.kind(resolved) != 'blob':
+            warn(f'{where}: image not found upstream: {target}')
+        elif src.excluded(resolved):
+            remote_images[target] = (
+                f'https://raw.githubusercontent.com/{src.slug}/{quote(src.ref)}/{quote(resolved)}'
+            )
+        else:
+            copy(resolved, read_blob(upstream, resolved))
+    point_images_at(nb, remote_images)
 
-    for path in find_local_code(nb, src.path, upstream):
-        write_file(src.dest_for(path), upstream.read(path), written)
-        files.add(path)
+    # 3. Local Python modules the notebook imports.
+    code_files = find_local_code(nb, src.path, upstream, skip=src.excluded)
+    for path in code_files:
+        if path not in files:
+            copy(path, read_blob(upstream, path))
+
+    # 4. Files the notebook's (or its modules') code names by a literal path.
+    for path in find_data_files(nb, src.path, code_files, upstream):
+        if path in files or src.excluded(path):
+            continue
+        data = upstream.read(path)
+        if data.startswith(LFS_POINTER) or len(data) > AUTO_MAX_BYTES:
+            warn(
+                f'{where}: not copying {path} automatically because it is over 10 MB or stored with Git LFS; '
+                'list it under include: in cookbook_sources.yml to copy it anyway'
+            )
+            continue
+        copy(path, data)
 
     rewrite_links(nb, src, upstream, files | {src.path})
     insert_attribution(nb, attribution_cell(nb, src, upstream, commit, date))
@@ -669,13 +890,18 @@ def main():
     new, written, failures = {}, {}, []
     upstreams = {}
     with tempfile.TemporaryDirectory() as tmp:
+
+        def get_upstream(owner, repo, ref):
+            key = (owner.lower(), repo.lower(), ref)
+            if key not in upstreams:
+                upstreams[key] = Upstream(owner, repo, ref, tmp)
+            return upstreams[key]
+
         for src in sources:
             log(f'{src.slug}: {src.path} ({src.ref})')
             try:
-                key = (src.owner, src.repo, src.ref)
-                if key not in upstreams:
-                    upstreams[key] = Upstream(*key, tmp)
-                new[src.dest] = sync_source(src, upstreams[key], written)
+                upstream = get_upstream(src.owner, src.repo, src.ref)
+                new[src.dest] = sync_source(src, upstream, written, get_upstream)
             except Exception as exc:  # keep the last good copy and carry on
                 error(f'{src.slug}/{src.path}: {exc}')
                 failures.append(src)
