@@ -1,28 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<?xml-stylesheet type="text/xsl" href="http://localhost:3000/sitemap_style.xsl" ?>
+<?xml-stylesheet type="text/xsl" href="http://pre.render/sitemap_style.xsl" ?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>http://localhost:3000</loc>
+    <loc>http://pre.render</loc>
   </url>
   <url>
-    <loc>http://localhost:3000/how-to-cite</loc>
+    <loc>http://pre.render/how-to-cite</loc>
   </url>
   <url>
-    <loc>http://localhost:3000/software-environment</loc>
+    <loc>http://pre.render/software-environment</loc>
   </url>
   <url>
-    <loc>http://localhost:3000/set-up-earthdata-login</loc>
+    <loc>http://pre.render/set-up-earthdata-login</loc>
   </url>
   <url>
-    <loc>http://localhost:3000/contributing</loc>
+    <loc>http://pre.render/contributing</loc>
   </url>
   <url>
-    <loc>http://localhost:3000/notebook-template</loc>
+    <loc>http://pre.render/notebook-template</loc>
   </url>
   <url>
-    <loc>http://localhost:3000/search-stream-nisar-asf-search</loc>
+    <loc>http://pre.render/search-stream-nisar-asf-search</loc>
   </url>
   <url>
-    <loc>http://localhost:3000/access-nisar-data</loc>
+    <loc>http://pre.render/access-nisar-data</loc>
   </url>
 </urlset>
